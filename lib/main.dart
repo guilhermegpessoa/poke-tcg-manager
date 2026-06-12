@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:dio/dio.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -42,6 +43,102 @@ class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _numeroController = TextEditingController();
 
   final _supabase = Supabase.instance.client;
+
+  bool _carregandoApi = false;
+
+  Future<void> _buscarCartaPorNumero() async {
+    String textoDigitado = _numeroController.text.trim();
+
+    if (textoDigitado.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Digite o número da carta primeiro!')),
+      );
+      return;
+    }
+
+    String numeroCarta = textoDigitado;
+    String? totalColecao;
+
+    // Se o usuário digitou com barra (ex: 087/217)
+    if (textoDigitado.contains('/')) {
+      final partes = textoDigitado.split('/');
+      numeroCarta = partes.first.trim();
+      totalColecao = partes.last.trim(); // Guarda o '217'
+    }
+
+    // Remove os zeros à esquerda do número da carta (ex: 087 -> 87)
+    numeroCarta = numeroCarta.replaceFirst(RegExp(r'^0+'), '');
+    if (numeroCarta.isEmpty) numeroCarta = '0';
+
+    setState(() {
+      _carregandoApi = true;
+    });
+
+    try {
+      final dio = Dio();
+
+      // Buscamos na API apenas pelo número puro
+      final response = await dio.get(
+        'https://api.pokemontcg.io/v2/cards',
+        queryParameters: {'q': 'number:$numeroCarta'},
+      );
+
+      final listaDeCartas = response.data['data'] as List;
+
+      if (listaDeCartas.isNotEmpty) {
+        Map<String, dynamic>? cartaEncontrada;
+
+        // Se o usuário informou o total da coleção (ex: 217), filtramos na lista retornada
+        if (totalColecao != null) {
+          for (var carta in listaDeCartas) {
+            // Convertemos para String para garantir a comparação correta
+            final totalNaApi = carta['set']?['printedTotal']?.toString();
+            if (totalNaApi == totalColecao) {
+              cartaEncontrada = carta as Map<String, dynamic>;
+              break;
+            }
+          }
+        }
+
+        // Se o usuário não digitou a barra, ou se o filtro por total falhou,
+        // pegamos a primeira carta da lista como plano de fundo
+        cartaEncontrada ??= listaDeCartas.first as Map<String, dynamic>;
+
+        final String nomePokemon = cartaEncontrada['name'];
+
+        setState(() {
+          _nomeController.text = nomePokemon;
+        });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Carta encontrada: $nomePokemon!')),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Nenhuma carta encontrada na API com esse número.'),
+            ),
+          );
+        }
+      }
+    } catch (erro) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro na busca: $erro'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      setState(() {
+        _carregandoApi = false;
+      });
+    }
+  }
 
   Future<void> _adicionarCarta() async {
     final String nome = _nomeController.text.trim();
@@ -106,6 +203,26 @@ class _HomeScreenState extends State<HomeScreen> {
               decoration: const InputDecoration(
                 labelText: 'Número da Carta (ex: 151/165)',
                 border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            ElevatedButton.icon(
+              onPressed: _carregandoApi ? null : _buscarCartaPorNumero,
+              icon: _carregandoApi
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.search),
+              label: Text(
+                _carregandoApi ? 'Buscando na API...' : 'Buscar Nome da Carta',
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blueGrey,
+                foregroundColor: Colors.white,
+                minimumSize: const Size.fromHeight(45),
               ),
             ),
             const SizedBox(height: 16),

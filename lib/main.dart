@@ -41,24 +41,40 @@ class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _nomeController = TextEditingController();
   final TextEditingController _numeroController = TextEditingController();
 
-  // Uma lista local na memória para simular o banco de dados por enquanto
-  final List<Map<String, String>> _minhaColecao = [];
+  final _supabase = Supabase.instance.client;
 
-  void _adicionarCarta() {
+  Future<void> _adicionarCarta() async {
     final String nome = _nomeController.text.trim();
     final String numero = _numeroController.text.trim();
 
     if (nome.isNotEmpty && numero.isNotEmpty) {
-      setState(() {
-        _minhaColecao.add({'nome': nome, 'numero': numero});
-      });
+      try {
+        // Faz o INSERT na tabela 'cartas' do Supabase
+        await _supabase.from('cartas').insert({'nome': nome, 'numero': numero});
 
-      // Limpa os campos depois de salvar
-      _nomeController.clear();
-      _numeroController.clear();
+        // Se deu certo, mostra um aviso na tela
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Carta adicionada com sucesso no Supabase!'),
+            ),
+          );
+        }
 
-      // Fecha o teclado virtual
-      FocusScope.of(context).unfocus();
+        // Limpa os campos e fecha o teclado
+        _nomeController.clear();
+        _numeroController.clear();
+        FocusScope.of(context).unfocus();
+      } catch (erro) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Erro ao salvar: $erro'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
     }
   }
 
@@ -112,22 +128,49 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 12),
 
             // Lista que mostra as cartas adicionadas
+            // Lista em tempo real conectada ao Supabase
             Expanded(
-              child: _minhaColecao.isEmpty
-                  ? const Center(child: Text('Nenhuma carta adicionada ainda.'))
-                  : ListView.builder(
-                      itemCount: _minhaColecao.length,
-                      itemBuilder: (context, index) {
-                        final carta = _minhaColecao[index];
-                        return Card(
-                          child: ListTile(
-                            leading: const Icon(Icons.style, color: Colors.red),
-                            title: Text(carta['nome'] ?? ''),
-                            subtitle: Text('Número: ${carta['numero']}'),
-                          ),
-                        );
-                      },
-                    ),
+              child: StreamBuilder<List<Map<String, dynamic>>>(
+                // Dizemos ao Supabase para "ouvir" a tabela 'cartas' em tempo real
+                stream: _supabase.from('cartas').stream(primaryKey: ['id']),
+                builder: (context, snapshot) {
+                  // Se o banco ainda estiver carregando os dados
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  // Se houver algum erro na conexão
+                  if (snapshot.hasError) {
+                    return Center(
+                      child: Text('Erro ao carregar cartas: ${snapshot.error}'),
+                    );
+                  }
+
+                  final cartas = snapshot.data ?? [];
+
+                  // Se o banco estiver vazio
+                  if (cartas.isEmpty) {
+                    return const Center(
+                      child: Text('Nenhuma carta na sua coleção ainda.'),
+                    );
+                  }
+
+                  // Se tiver cartas, desenha a lista na tela
+                  return ListView.builder(
+                    itemCount: cartas.length,
+                    itemBuilder: (context, index) {
+                      final carta = cartas[index];
+                      return Card(
+                        child: ListTile(
+                          leading: const Icon(Icons.style, color: Colors.red),
+                          title: Text(carta['nome'] ?? 'Sem nome'),
+                          subtitle: Text('Número: ${carta['numero'] ?? 'S/N'}'),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
             ),
           ],
         ),

@@ -2,9 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:dio/dio.dart';
+import 'package:camera/camera.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+
+List<CameraDescription> cameras = [];
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Inicializa as câmeras do aparelho
+  try {
+    cameras = await availableCameras();
+  } catch (e) {
+    print("Erro ao inicializar câmeras: $e");
+  }
 
   await dotenv.load(fileName: ".env");
 
@@ -38,12 +49,9 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // Controladores para capturar o que o usuário digita
   final TextEditingController _nomeController = TextEditingController();
   final TextEditingController _numeroController = TextEditingController();
-
   final _supabase = Supabase.instance.client;
-
   bool _carregandoApi = false;
 
   Future<void> _buscarCartaPorNumero() async {
@@ -51,7 +59,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (textoDigitado.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Digite o número da carta primeiro!')),
+        const SnackBar(content: Text('Digite ou escaneie o número primeiro!')),
       );
       return;
     }
@@ -63,7 +71,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (textoDigitado.contains('/')) {
       final partes = textoDigitado.split('/');
       numeroCarta = partes.first.trim();
-      totalColecao = partes.last.trim(); // Guarda o '217'
+      totalColecao = partes.last.trim();
     }
 
     // Remove os zeros à esquerda do número da carta (ex: 087 -> 87)
@@ -101,9 +109,8 @@ class _HomeScreenState extends State<HomeScreen> {
         }
 
         // Se o usuário não digitou a barra, ou se o filtro por total falhou,
-        // pegamos a primeira carta da lista como plano de fundo
+        // pegamos a primeira carta da lista
         cartaEncontrada ??= listaDeCartas.first as Map<String, dynamic>;
-
         final String nomePokemon = cartaEncontrada['name'];
 
         setState(() {
@@ -118,9 +125,7 @@ class _HomeScreenState extends State<HomeScreen> {
       } else {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Nenhuma carta encontrada na API com esse número.'),
-            ),
+            const SnackBar(content: Text('Nenhuma carta encontrada na API.')),
           );
         }
       }
@@ -146,19 +151,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (nome.isNotEmpty && numero.isNotEmpty) {
       try {
-        // Faz o INSERT na tabela 'cartas' do Supabase
         await _supabase.from('cartas').insert({'nome': nome, 'numero': numero});
 
-        // Se deu certo, mostra um aviso na tela
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Carta adicionada com sucesso no Supabase!'),
-            ),
+            const SnackBar(content: Text('Carta adicionada com sucesso!')),
           );
         }
 
-        // Limpa os campos e fecha o teclado
         _nomeController.clear();
         _numeroController.clear();
         FocusScope.of(context).unfocus();
@@ -175,6 +175,33 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // Função que abre a tela da câmera e recebe o número escaneado de volta
+  Future<void> _abrirScanner() async {
+    if (cameras.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Nenhuma câmera encontrada no dispositivo.'),
+        ),
+      );
+      return;
+    }
+
+    final resultadoScan = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ScannerScreen(camera: cameras.first),
+      ),
+    );
+
+    if (resultadoScan != null && mounted) {
+      setState(() {
+        _numeroController.text = resultadoScan;
+      });
+      // Já dispara a busca na API automaticamente após scannear!
+      _buscarCartaPorNumero();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -187,25 +214,28 @@ class _HomeScreenState extends State<HomeScreen> {
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            // Campo: Nome do Pokémon
             TextField(
               controller: _nomeController,
               decoration: const InputDecoration(
-                labelText: 'Nome do Pokémon (ex: Charizard)',
+                labelText: 'Nome do Pokémon',
                 border: OutlineInputBorder(),
               ),
             ),
             const SizedBox(height: 12),
 
-            // Campo: Número da Carta
+            // Campo de número com o botão de Câmera embutido!
             TextField(
               controller: _numeroController,
-              decoration: const InputDecoration(
-                labelText: 'Número da Carta (ex: 151/165)',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                labelText: 'Número da Carta (ex: 087/217)',
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.camera_alt, color: Colors.red),
+                  onPressed: _abrirScanner,
+                ),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
 
             ElevatedButton.icon(
               onPressed: _carregandoApi ? null : _buscarCartaPorNumero,
@@ -216,9 +246,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.search),
-              label: Text(
-                _carregandoApi ? 'Buscando na API...' : 'Buscar Nome da Carta',
-              ),
+              label: Text(_carregandoApi ? 'Buscando...' : 'Buscar Nome'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.blueGrey,
                 foregroundColor: Colors.white,
@@ -227,7 +255,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 16),
 
-            // Botão Salvar
             ElevatedButton.icon(
               onPressed: _adicionarCarta,
               icon: const Icon(Icons.add),
@@ -238,41 +265,20 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 24),
 
-            const Text(
-              'Cartas na Minha Pasta:',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-
-            // Lista que mostra as cartas adicionadas
-            // Lista em tempo real conectada ao Supabase
             Expanded(
               child: StreamBuilder<List<Map<String, dynamic>>>(
-                // Dizemos ao Supabase para "ouvir" a tabela 'cartas' em tempo real
                 stream: _supabase.from('cartas').stream(primaryKey: ['id']),
                 builder: (context, snapshot) {
-                  // Se o banco ainda estiver carregando os dados
-                  if (snapshot.connectionState == ConnectionState.waiting) {
+                  if (snapshot.connectionState == ConnectionState.waiting)
                     return const Center(child: CircularProgressIndicator());
-                  }
-
-                  // Se houver algum erro na conexão
-                  if (snapshot.hasError) {
-                    return Center(
-                      child: Text('Erro ao carregar cartas: ${snapshot.error}'),
-                    );
-                  }
-
+                  if (snapshot.hasError)
+                    return Center(child: Text('Erro: ${snapshot.error}'));
                   final cartas = snapshot.data ?? [];
-
-                  // Se o banco estiver vazio
-                  if (cartas.isEmpty) {
+                  if (cartas.isEmpty)
                     return const Center(
-                      child: Text('Nenhuma carta na sua coleção ainda.'),
+                      child: Text('Nenhuma carta adicionada.'),
                     );
-                  }
 
-                  // Se tiver cartas, desenha a lista na tela
                   return ListView.builder(
                     itemCount: cartas.length,
                     itemBuilder: (context, index) {
@@ -280,8 +286,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       return Card(
                         child: ListTile(
                           leading: const Icon(Icons.style, color: Colors.red),
-                          title: Text(carta['nome'] ?? 'Sem nome'),
-                          subtitle: Text('Número: ${carta['numero'] ?? 'S/N'}'),
+                          title: Text(carta['nome'] ?? ''),
+                          subtitle: Text('Número: ${carta['numero']}'),
                         ),
                       );
                     },
@@ -292,6 +298,135 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+// --- TELA DA CÂMERA COM RECONHECIMENTO DE TEXTO (OCR) ---
+class ScannerScreen extends StatefulWidget {
+  final CameraDescription camera;
+  const ScannerScreen({super.key, required this.camera});
+
+  @override
+  State<ScannerScreen> createState() => _ScannerScreenState();
+}
+
+class _ScannerScreenState extends State<ScannerScreen> {
+  late CameraController _cameraController;
+  late Future<void> _initializeControllerFuture;
+  final _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+  bool _processando = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _cameraController = CameraController(
+      widget.camera,
+      ResolutionPreset.high,
+      enableAudio: false,
+    );
+    _initializeControllerFuture = _cameraController.initialize();
+  }
+
+  @override
+  void dispose() {
+    _cameraController.dispose();
+    _textRecognizer.close();
+    super.dispose();
+  }
+
+  Future<void> _escanearImagem() async {
+    if (_processando) return;
+
+    setState(() {
+      _processando = true;
+    });
+
+    try {
+      await _initializeControllerFuture;
+      // Tira uma foto temporária
+      final imagem = await _cameraController.takePicture();
+
+      // Converte a foto para o formato que o ML Kit entende
+      final inputImage = InputImage.fromFilePath(imagem.path);
+
+      // Roda a IA de leitura de texto
+      final RecognizedText recognizedText = await _textRecognizer.processImage(
+        inputImage,
+      );
+
+      // Padrão Regex para encontrar formatos tipo "087/217" ou "151/165"
+      final RegExp regexNumeroPokemon = RegExp(r'\d+/\d+');
+      String? numeroEncontrado;
+
+      // Percorre as linhas de texto encontradas pela câmera
+      for (TextBlock block in recognizedText.blocks) {
+        for (TextLine line in block.lines) {
+          if (regexNumeroPokemon.hasMatch(line.text)) {
+            numeroEncontrado = regexNumeroPokemon.stringMatch(line.text);
+            break;
+          }
+        }
+        if (numeroEncontrado != null) break;
+      }
+
+      if (numeroEncontrado != null && mounted) {
+        // Devolve o número encontrado para a tela anterior
+        Navigator.pop(context, numeroEncontrado);
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Não encontramos o número da carta. Aproxime mais o canto inferior!',
+              ),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      print("Erro ao scannear: $e");
+    } finally {
+      if (mounted) {
+        setState(() {
+          _processando = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Aponte para o número da carta'),
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+      ),
+      body: FutureBuilder<void>(
+        future: _initializeControllerFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.done) {
+            return Stack(
+              children: [
+                CameraPreview(_cameraController),
+                if (_processando)
+                  const Center(
+                    child: CircularProgressIndicator(color: Colors.red),
+                  ),
+              ],
+            );
+          } else {
+            return const Center(child: CircularProgressIndicator());
+          }
+        },
+      ),
+      floatingActionButton: FloatingActionButton.large(
+        onPressed: _escanearImagem,
+        backgroundColor: Colors.red,
+        child: const Icon(Icons.camera, size: 40, color: Colors.white),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
     );
   }
 }
